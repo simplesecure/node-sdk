@@ -57,6 +57,7 @@ module.exports = {
     .then(async (body) => {
       // POST succeeded...
       return {
+        success: true,
         message: "successfully created keychain",
         body: body
       }
@@ -65,6 +66,7 @@ module.exports = {
       // POST failed...
       console.log('ERROR: ', error)
       return {
+        success: false,
         message: "failed to create keychain",
         body: error
       }
@@ -122,7 +124,7 @@ module.exports = {
           console.log("Keychain made")
           idAddress = keychain.body;
           //Now we make the profile
-          let profile = await this.makeProfile(config);
+          let profile = this.makeProfile(config);
 
           const appKeyParams = {
             username: credObj.id,
