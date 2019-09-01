@@ -286,7 +286,7 @@ describe('LogIn', function() {
       userPayload: {}
     }
     const loggedIn = await auth.login(params);
-    console.log(loggedIn);
+    console.log(loggedIn.body.store);
     assert(loggedIn.message, "user session created");
   })
 });

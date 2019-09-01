@@ -140,12 +140,8 @@ module.exports = {
               const appPrivateKey = JSON.parse(appKeys.body).blockstack ? JSON.parse(appKeys.body).blockstack.private : "";
               configObj = JSON.parse(appKeys.body).config || {};
               apiKey = JSON.parse(appKeys.body).apiKey || "";
-              wallet = JSON.parse(appKeys.body).walet;
-              if(config.authModules && config.authModules.indexOf('textile') > -1) {
-                textile = JSON.parse(appKeys.body).textile;
-              } else {
-                textile = null;
-              }
+              wallet = JSON.parse(appKeys.body).wallet;
+              textile = JSON.parse(appKeys.body).textile || "";
             const appUrl = JSON.parse(appKeys.body).blockstack.appUrl || "";
               profile.apps[config.appOrigin] = appUrl;
               //Let's register the name now
@@ -260,12 +256,9 @@ module.exports = {
           const appUrl = JSON.parse(appKeys.body).blockstack.appUrl || "";
           configObj = JSON.parse(appKeys.body).config;
           apiKey = JSON.parse(appKeys.body).apiKey || "";
-          wallet = JSON.parse(appKeys.body).walet;
-          if(params.appObj.authModules && params.appObj.authModules.indexOf('textile') > -1) {
-            textile = JSON.parse(appKeys.body).textile;
-          } else {
-            textile = null;
-          }
+          wallet = JSON.parse(appKeys.body).wallet;
+          textile = JSON.parse(appKeys.body).textile || "";
+          
           profile.apps[params.appObj.appOrigin] = appUrl;
           //Now, we login
           try {
