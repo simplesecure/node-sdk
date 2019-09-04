@@ -246,16 +246,16 @@ let testKeychain
 // //   })
 // // })
 
-// //Account Creation
-// describe('CreateAccount', function() {
-//   this.timeout(10000);
-//   it('should return account created message', async function() {
-//       const create = await auth.createUserAccount(credObj, appObj);
-//       credObjLogIn.id = credObj.id;
-//       console.log(create)
-//       assert.equal(create.message,"user session created")
-//   });
-// });
+//Account Creation
+describe('CreateAccount', function() {
+  this.timeout(10000);
+  it('should return account created message', async function() {
+      const create = await auth.createUserAccount(credObj, appObj);
+      credObjLogIn.id = credObj.id;
+      console.log(create)
+      assert.equal(create.message,"user session created")
+  });
+});
 
 //NOTE: This cannot be run from the automated tests since the server expects an origin
 // describe('CreateDevAccount', function() {
@@ -277,19 +277,19 @@ let testKeychain
 
 
 //Log In
-describe('LogIn', function() {
-  this.timeout(20000);
-  it('kick off recovery flow with email, username, and password', async function() {
-    const params = {
-      credObj: credObjLogIn,
-      appObj,
-      userPayload: {}
-    }
-    const loggedIn = await auth.login(params);
-    console.log(loggedIn.body.store);
-    assert(loggedIn.message, "user session created");
-  })
-});
+// describe('LogIn', function() {
+//   this.timeout(20000);
+//   it('kick off recovery flow with email, username, and password', async function() {
+//     const params = {
+//       credObj: credObjLogIn,
+//       appObj,
+//       userPayload: {}
+//     }
+//     const loggedIn = await auth.login(params);
+//     console.log(loggedIn.body.store);
+//     assert(loggedIn.message, "user session created");
+//   })
+// });
 
 //BlockstackJS Operations
 

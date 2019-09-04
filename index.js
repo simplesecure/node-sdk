@@ -21,7 +21,6 @@ module.exports = {
       }
     })
     .catch(error => {
-      console.log(error.error)
       if(error.error === '{\n  "status": "available"\n}\n' || error.error === '{"status":"available"}') {
         return {
           pass: true,
