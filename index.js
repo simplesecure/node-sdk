@@ -11,7 +11,6 @@ let headers = { 'Content-Type': 'application/json' };
 
 module.exports = {
   nameLookUp: function(name) {
-    console.log(`${name}.id.blockstack`)
     //Note: if we want to support other names spaces and other root id, we will need a different approach.
     const options = { url: `${config.NAME_LOOKUP_URL}${name}.id.blockstack`, method: 'GET' };
     return request(options)
@@ -91,7 +90,6 @@ module.exports = {
     var options = { url: config.APP_KEY_URL, method: 'POST', headers: headers, form: dataString };
     return request(options)
     .then((body) => {
-      console.log(body);
       return {
         message: "successfully created app keypair",
         body: body
@@ -107,12 +105,10 @@ module.exports = {
   },
   createUserAccount: async function(credObj, config) {
     //For now we can continue to use Blockstack's name lookup, even for non-Blockstack auth
+    console.log("Creating account...");
     const nameCheck = await this.nameLookUp(credObj.id);
-    console.log("Verifying name availability...");
     if(nameCheck.pass) {
-      console.log("Name check passed");
       try {
-        console.log("Making keychain...");
         const keychain = await this.makeKeychain(credObj, config);
         if(keychain.success === false) {
           //This would happen for a variety of reasons, just return the server message
@@ -121,7 +117,6 @@ module.exports = {
             message: keychain.body
           }
         } else {
-          console.log("Keychain made")
           idAddress = keychain.body;
           //Now we make the profile
           let profile = this.makeProfile(config);
@@ -133,10 +128,8 @@ module.exports = {
           }
 
           try {
-            console.log("Making app keys...");
             const appKeys = await this.makeAppKeyPair(appKeyParams, profile);
             if(appKeys) {
-              console.log("App keys created");
               const appPrivateKey = JSON.parse(appKeys.body).blockstack ? JSON.parse(appKeys.body).blockstack.private : "";
               configObj = JSON.parse(appKeys.body).config || {};
               apiKey = JSON.parse(appKeys.body).apiKey || "";
@@ -145,10 +138,9 @@ module.exports = {
             const appUrl = JSON.parse(appKeys.body).blockstack.appUrl || "";
               profile.apps[config.appOrigin] = appUrl;
               //Let's register the name now
-              console.log("Registering name...");
               const registeredName = await this.registerSubdomain(credObj.id, idAddress);
               if(registeredName) {
-                console.log("Name registered");
+                // console.log("Name registered");
               }
               //Now, we login
               try {
@@ -160,10 +152,9 @@ module.exports = {
                     privateKey: appPrivateKey,
                   }
                 }
-                console.log("Logging in...");
+
                 const userSession = await this.login(userSessionParams, profile);
                 if(userSession) {
-                  console.log("Logged in");
                   return {
                     message: "user session created",
                     body: userSession.body
@@ -207,7 +198,6 @@ module.exports = {
     }
   },
   login: async function(params, newProfile) {
-    console.log(params);
     //params object should include the credentials obj, appObj, (optional) user payload with appKey and mnemonic and (optional) a bool determining whether we need to fetch data from the DB
     //@params fetchFromDB is a bool. Should be false if account was just created
     //@params credObj is simply the username and password
@@ -269,7 +259,6 @@ module.exports = {
                 privateKey: appPrivateKey,
               }
             }
-            console.log("Logging in....");
             const userPayload = userSessionParams.userPayload;
             const sessionObj = {
               scopes: params.appObj.scopes,
@@ -368,7 +357,6 @@ module.exports = {
     return request(options)
     .then(async (body) => {
       // POST succeeded...
-      console.log('success username registered')
       return {
         message: "username registered",
         body: body
@@ -388,7 +376,6 @@ module.exports = {
     let profile
     try {
       profile = await lookupProfile(`${name}.id.blockstack`);
-      console.log("PROFILE:", profile);
       if (profile.apps) {
         if(profile.apps[appObj.appOrigin]) {
           //Don't need to do anything unless the gaia hub url is an empty string
