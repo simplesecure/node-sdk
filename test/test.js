@@ -13,8 +13,8 @@ const appObj = {
   storageModules: ['blockstack', 'ethereum', 'textile'],
   authModules: ['blockstack', 'pinata']
 }
-const credObj = {id: availableName, password: "super secure password", hubUrl: "https://gaia.blockstack.org", email: emailToUse}
-const credObjLogIn = {id: "bing_bong_is_a_friend", password: "1016Jk5811!", hubUrl: "https://gaia.blockstack.org", email: "justin.edward.hunter@gmail.com"}
+let credObj = {id: availableName, password: "super secure password", hubUrl: "https://gaia.blockstack.org", email: emailToUse}
+let credObjLogIn = {id: "bing_bong_is_a_friend", password: "1016Jk5811!", hubUrl: "https://gaia.blockstack.org", email: "justin.edward.hunter@gmail.com"}
 //For Ethereum
 const contractAddress = "0x4f7DE17889C29c9F2482B017d467a481cE3376C0";
 const abi = [
@@ -246,16 +246,16 @@ let testKeychain
 // //   })
 // // })
 
-//Account Creation
-describe('CreateAccount', function() {
-  this.timeout(10000);
-  it('should return account created message', async function() {
-      const create = await auth.createUserAccount(credObj, appObj);
-      credObjLogIn.id = credObj.id;
-      console.log(create)
-      assert.equal(create.message,"user session created")
-  });
-});
+// //Account Creation
+// describe('CreateAccount', function() {
+//   this.timeout(10000);
+//   it('should return account created message', async function() {
+//       const create = await auth.createUserAccount(credObj, appObj);
+//       credObjLogIn.id = credObj.id;
+//       console.log(create)
+//       assert.equal(create.message,"user session created")
+//   });
+// });
 
 //NOTE: This cannot be run from the automated tests since the server expects an origin
 // describe('CreateDevAccount', function() {
@@ -277,19 +277,33 @@ describe('CreateAccount', function() {
 
 
 //Log In
-// describe('LogIn', function() {
-//   this.timeout(20000);
-//   it('kick off recovery flow with email, username, and password', async function() {
-//     const params = {
-//       credObj: credObjLogIn,
-//       appObj,
-//       userPayload: {}
-//     }
-//     const loggedIn = await auth.login(params);
-//     console.log(loggedIn.body.store);
-//     assert(loggedIn.message, "user session created");
-//   })
-// });
+describe('LogIn', function() {
+  this.timeout(20000);
+  it('kick off recovery flow with email, username, and password', async function() {
+    const params = {
+      credObj: credObjLogIn,
+      appObj,
+      userPayload: {}
+    }
+    const loggedIn = await auth.login(params);
+    assert(loggedIn.message, "user session created");
+  })
+});
+
+//User doesn't exist log in
+describe('Log in with invalid user', function() {
+  this.timeout(20000);
+  it('Attempt to log in with invalid user', async function() {
+    credObjLogIn.id = "jhsfjksadhfjhsjfh";
+    const params = {
+      credObj: credObjLogIn,
+      appObj,
+      userPayload: {}
+    }
+    const loggedIn = await auth.login(params);
+    assert(loggedIn.body, `404 - "GENERATE_APP_KEYS ERROR (3): Username does not exist"`);
+  })
+});
 
 //BlockstackJS Operations
 

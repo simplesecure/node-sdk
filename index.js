@@ -90,15 +90,17 @@ module.exports = {
     return request(options)
     .then((body) => {
       return {
+        success: true,
         message: "successfully created app keypair",
         body: body
       }
     })
-    .catch(error => {
-      console.log('Error: ', error);
+    .catch((error) => {
+      console.log('Error: ', error.message);
       return {
+        success: false,
         message: "failed to created app keypair",
-        body: error
+        body: error.message
       }
     });
   },
@@ -179,7 +181,7 @@ module.exports = {
           } catch(error) {
             return {
               message: "error creating app keys",
-              body: error
+              body: userSession.body.error
             }
           }
         }
@@ -240,7 +242,7 @@ module.exports = {
       const profile = await this.updateProfile(params.credObj.id, params.appObj);
       try {
         const appKeys = await this.makeAppKeyPair(appKeyParams, profile);
-        if(appKeys) {
+        if(appKeys.success) {
           const appPrivateKey = JSON.parse(appKeys.body).blockstack ? JSON.parse(appKeys.body).blockstack.private : "";
           const appUrl = JSON.parse(appKeys.body).blockstack.appUrl || "";
           configObj = JSON.parse(appKeys.body).config;
@@ -289,13 +291,13 @@ module.exports = {
         } else {
           return {
             message: "error creating app keys",
-            body: null
+            body: appKeys.body
           }
         }
       } catch(error) {
         return {
           message: "error creating app keys",
-          body: error
+          body: appKeys.body ? appKeys.body : error
         }
       }
     }
