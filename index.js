@@ -1,572 +1,493 @@
-const config = require('./config.json');
+const { updateProfile, handleAuth } = require('./simpleidapi/actions');
+const { nameLookUp, registerSubdomain, makeUserSession } = require('./blockstack/actions');
+const { UserSession, AppConfig } = require('blockstack');
 const request = require('request-promise');
-const { InstanceDataStore } = require('blockstack/lib/auth/sessionStore');
-const { AppConfig, UserSession, lookupProfile, connectToGaiaHub } = require('blockstack');
-let idAddress;
-let configObj;
-let wallet;
-let textile;
+const config = require('./config.json');
+const INFURA_KEY = "b8c67a1f996e4d5493d5ba3ae3abfb03"; //TODO: move this to the server to protect key
+const LAYER2_RPC_SERVER = 'https://testnet2.matic.network';
+const SIMPLEID_USER_SESSION = 'SimpleID-User-Session';
+const BLOCKSTACK_DEFAULT_HUB = "https://hub.blockstack.org";
+const BLOCKSTACK_SESSION = 'blockstack-session';
+const Web3 = require('web3'); //TODO: remove web3 dependency
+const ethers = require('ethers');
+let headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+let web3;
+let tx;
 
-let headers = { 'Content-Type': 'application/json' };
-
-module.exports = {
-  nameLookUp: function(name) {
-    //Note: if we want to support other names spaces and other root id, we will need a different approach.
-    const options = { url: `${config.NAME_LOOKUP_URL}${name}.id.blockstack`, method: 'GET' };
-    return request(options)
-    .then(async () => {
-      return {
-        pass: false,
-        message: "name taken"
-      }
-    })
-    .catch(error => {
-      if(error.error === '{\n  "status": "available"\n}\n' || error.error === '{"status":"available"}') {
-        return {
-          pass: true,
-          message: "name available"
-        }
-      } else {
-        return {
-          pass: false,
-          body: error
-        }
-      }
-
-    });
-  },
-  makeKeychain: async function(credObj, devConfig) {
-    //Send the username and the passphrase which will be used by the server to encrypt sensitive data
-    const dataString = {
-      username: credObj.id,
-      email: credObj.email,
-      password: credObj.password,
-      development: devConfig.development ? true : false,
-      devId: devConfig.devId,
-      storageModules: devConfig.storageModules,
-      authModules: devConfig.authModules
-    }
-
-    headers['Authorization'] = devConfig.apiKey;
-
-    //This is a simple call to replicate blockstack's make keychain function
-    const options = { url: config.KEYCHAIN_URL, method: 'POST', headers: headers, form: dataString };
-    return request(options)
-    .then(async (body) => {
-      // POST succeeded...
-      return {
-        success: true,
-        message: "successfully created keychain",
-        body: body
-      }
-    })
-    .catch(error => {
-      // POST failed...
-      console.log('ERROR: ', error)
-      return {
-        success: false,
-        message: "failed to create keychain",
-        body: error
-      }
-    });
-  },
-  makeAppKeyPair: async function(params, profile) {
-   //Need to determine if this call is being made on account registration or not
-    const dataString = {
-      username: params.username,
-      password: params.password,
-      url: params.appObj.appOrigin,
-      profile: profile && profile.apps ? JSON.stringify(profile) : null,
-      development: params.appObj.development ? true : false,
-      isDeveloper: params.appObj.isDev ? true : false,
-      devId: params.appObj.devId,
-      storageModules: params.appObj.storageModules,
-      authModules: params.appObj.authModules
-    }
-
-    headers['Authorization'] = params.appObj.apiKey;
-
-    var options = { url: config.APP_KEY_URL, method: 'POST', headers: headers, form: dataString };
-    return request(options)
+function postToApi(options) {
+  return request(options)
     .then((body) => {
       return {
         success: true,
-        message: "successfully created app keypair",
-        body: body
+        body: JSON.parse(body)
       }
     })
-    .catch((error) => {
-      console.log('Error: ', error.message);
+    .catch(error => {
+      console.log('Error: ', error);
       return {
         success: false,
-        message: "failed to created app keypair",
-        body: error.message
+        body: JSON.parse(error)
       }
     });
-  },
-  createUserAccount: async function(credObj, config) {
-    //For now we can continue to use Blockstack's name lookup, even for non-Blockstack auth
-    console.log("Creating account...");
-    const nameCheck = await this.nameLookUp(credObj.id);
-    if(nameCheck.pass) {
-      try {
-        const keychain = await this.makeKeychain(credObj, config);
-        if(keychain.success === false) {
-          //This would happen for a variety of reasons, just return the server message
-          return {
-            success: false,
-            message: keychain.body
-          }
-        } else {
-          idAddress = keychain.body;
-          //Now we make the profile
-          let profile = this.makeProfile(config);
+}
 
-          const appKeyParams = {
-            username: credObj.id,
-            appObj: config,
-            password: credObj.password
-          }
+module.exports = class SimpleID {
+  constructor(params) {
+    this.config = params;
+    this.localRPCServer = params.localRPCServer;
+    this.network = params.network;
+    this.apiKey = params.apiKey;
+    this.devId = params.devId;
+    this.scopes = params.scopes;
+    this.appOrigin = params.appOrigin;
+    this.development = params.development ? params.development : false;
+    this.provider = new Web3.providers.HttpProvider(this.network === "local" ? this.localRPCServer : this.network === "layer2" ? LAYER2_RPC_SERVER : `https://${this.network}.infura.io/v3/${INFURA_KEY}`);
+    web3 = new Web3(this.provider);
+    headers['Authorization'] = this.apiKey;
+    this.simple = ethers;
+  }
 
-          try {
-            const appKeys = await this.makeAppKeyPair(appKeyParams, profile);
-            if(appKeys) {
-              const appPrivateKey = JSON.parse(appKeys.body).blockstack ? JSON.parse(appKeys.body).blockstack.private : "";
-              configObj = JSON.parse(appKeys.body).config || {};
-              apiKey = JSON.parse(appKeys.body).apiKey || "";
-              wallet = JSON.parse(appKeys.body).wallet;
-              textile = JSON.parse(appKeys.body).textile || "";
-            const appUrl = JSON.parse(appKeys.body).blockstack.appUrl || "";
-              profile.apps[config.appOrigin] = appUrl;
-              //Let's register the name now
-              const registeredName = await this.registerSubdomain(credObj.id, idAddress);
-              if(registeredName) {
-                // console.log("Name registered");
-              }
-              //Now, we login
-              try {
-                const userSessionParams = {
-                  accountCreation: true,
-                  credObj,
-                  appObj: config,
-                  userPayload: {
-                    privateKey: appPrivateKey,
-                  }
-                }
+  //If a developer wants to use the ethers.js library manually in-app, they can access it with this function
+  simpleWeb3() {
+    return this.simple;
+  }
 
-                const userSession = await this.login(userSessionParams, profile);
-                if(userSession) {
-                  return {
-                    message: "user session created",
-                    body: userSession.body
-                  }
-                } else {
-                  return {
-                    message: "trouble creating user session",
-                    body: null
-                  }
-                }
-              } catch (loginErr) {
-                return {
-                  message: "trouble logging in",
-                  body: loginErr
-                }
-              }
-            } else {
-              return {
-                message: "error creating app keys",
-                body: null
-              }
-            }
-          } catch(error) {
-            return {
-              message: "error creating app keys",
-              body: userSession.body.error
-            }
-          }
-        }
-      } catch(keychainErr) {
-        return {
-          message: "Failed to create keychain",
-          body: keychainErr
-        }
-      }
-    } else {
-      return {
-        message: nameCheck.message,
-        body: null
-      }
+  getProvider() {
+    return this.provider;
+  }
+
+  //This returns the wallet info for the SimpleID user
+  getUserData() {
+    return JSON.parse(localStorage.getItem(SIMPLEID_USER_SESSION));
+  }
+
+  //This returns the blockstack-specific user-session. Example usage in-app: 
+  //const userSession = simple.getBlockstackSession();
+  //userSession.putFile(FILE_NAME, FILE_CONTENT);
+  
+  getBlockstackSession() {
+    const appConfig = new AppConfig(this.scopes);
+    const userSession = new UserSession({ appConfig });
+    return userSession;
+  }
+
+  async authenticate(payload, options={}) {
+    const { email } = payload;
+    payload.config = this.config;
+    payload.url = this.appOrigin;
+    const blockstackName = `${email.split('@')[0].split('.').join('_')}_simple`;
+    //The statusCallbackFn is a hook for developers to give visibility about what our API is doing to users. 
+    //It's a function the developer defines that changes the state on a component forcing a re-render with the message that we pass back. 
+    let statusCallbackFn;
+    try {
+      statusCallbackFn = options.hasOwnProperty('statusCallbackFn') ? options['statusCallbackFn'] : undefined
+    } catch(e) {
+      console.log(e);
     }
-  },
-  login: async function(params, newProfile) {
-    //params object should include the credentials obj, appObj, (optional) user payload with appKey and mnemonic and (optional) a bool determining whether we need to fetch data from the DB
-    //@params fetchFromDB is a bool. Should be false if account was just created
-    //@params credObj is simply the username and password
-    //@params appObj is provided by the developer and is an object containing app scopes and app origin
-    //@params userPayload object that includes the app key and the mnemonic
-    if(params.accountCreation) {
-      const userPayload = params.userPayload;
-      const sessionObj = {
-        scopes: params.appObj.scopes,
-        appOrigin: params.appObj.appOrigin,
-        appPrivKey: userPayload.privateKey,
-        hubUrl: params.credObj.hubUrl ? params.credObj.hubUrl : "https://hub.blockstack.org", //Still have to think through this one
-        username: params.credObj.id,
-        profile: newProfile
-      }
+  
+    if (statusCallbackFn) {
+      statusCallbackFn("Checking email address...");
+    }
+    const appObj = {
+      scopes: this.scopes, 
+      appOrigin: this.appOrigin, 
+      apiKey: this.apiKey, 
+      devId: this.devId, 
+      development: this.development
+    }
+    const profile = await updateProfile(blockstackName, appObj);
+    payload.profile = profile;
+    const account = await handleAuth(payload);
+    console.log(account);
+    if(!account.success) {
+      const appPrivateKey = account.blockstack ? account.blockstack.private : "";
+      //Set local storage to ensure simpleid user session exists
+      console.log("Setting local storage...");
+      localStorage.setItem(SIMPLEID_USER_SESSION, JSON.stringify(account));
+      console.log("Local storage should be set now")
+      //Make blockstack user session and set it to local storage
       try {
-        const userSession = await this.makeUserSession(sessionObj);
+        const userSessionParams = {
+          appObj: appObj,
+          userPayload: {
+            privateKey: appPrivateKey,
+          }
+        }
+        const userPayload = userSessionParams.userPayload;
+        const sessionObj = {
+          scopes: appObj.scopes,
+          appOrigin: appObj.appOrigin,
+          appPrivKey: userPayload.privateKey,
+          hubUrl: this.hubUrl ? this.hubUrl : BLOCKSTACK_DEFAULT_HUB,
+          username: blockstackName, //need to account for blockstack's name restrictions
+          profile
+        }
+        const idAddress = account.blockstack.idAddress ? account.blockstack.idAddress : "";
+        const userSession = await makeUserSession(sessionObj, idAddress);
+
         if(userSession) {
+          console.log("Blockstack session created");
+          //Setting the blockstack user session to local storage so the dev doesn't manually have to
+          localStorage.setItem(BLOCKSTACK_SESSION, JSON.stringify(userSession.body.store.sessionData));
           return {
             message: "user session created",
             body: userSession.body
           }
         } else {
+          console.log("ERROR: could not create Blockstack session")
           return {
-            message: "error creating user session",
+            message: "trouble creating user session",
             body: null
           }
         }
-      } catch (userSessErr) {
+      } catch (loginErr) {
         return {
-          message: "error creating user session",
-          body: userSessErr
+          message: "trouble logging in",
+          body: loginErr
         }
       }
+    }
+    return account;
+  }
+
+  signOut() {
+    localStorage.removeItem('blockstack-session');
+    localStorage.removeItem(SIMPLEID_USER_SESSION);
+    window.location.reload();
+  }
+
+  buyCrypto(params) {
+    const moonEnv = params.env === "test" ? "buy-staging" : "buy";
+    const apiKey = params.env === "test" ? "pk_test_gEFnegtEHajeQURGYVxg0GjVriooNltf" : "" //TODO: enter prod key
+    
+    const div = document.createElement("DIV");
+    const closeButton = document.createElement("span");
+    const iFrame = document.createElement("iframe");
+    iFrame.setAttribute('src', `https://${moonEnv}.moonpay.io/?apiKey=${apiKey}&currencyCode=${params.currency}&walletAddress=${params.address}&baseCurrency=${params.baseCurrency}&email=${params.email}`);
+    iFrame.setAttribute('height', "500");
+    div.appendChild(closeButton);
+    div.appendChild(iFrame);
+    div.style.display = "block";
+    div.style.background = "#fff";
+    div.style.border = "1px #eee solid";
+    div.style.borderRadius = "5px";
+    div.style.padding = "20px";
+    div.style.paddingTop = "35px";
+    div.style.position = "fixed";
+    div.style.bottom = "10px";
+    div.style.right = "10px";
+    div.style.zIndex = "1024";
+    closeButton.innerText = "Close";
+    closeButton.style.position = "absolute";
+    closeButton.style.top = "5px";
+    closeButton.style.right = "15px";
+    closeButton.style.cursor = "pointer";
+    closeButton.addEventListener('click', () => {
+      div.style.display = "none";
+    })
+    document.body.appendChild(div);
+    //const envi = params.env === "test" ? "testwyre" : "sendwyre";
+    //window.location.replace(`https://pay.${envi}.com/purchase?destCurrency=${params.currency}&dest=${params.address}&paymentMethod=${params.method}&redirectUrl=${params.redirectUrl}`)
+  }
+
+  async fetchContract(abi, address) {
+    const provider = new ethers.providers.Web3Provider(this.provider);
+    let contract = new ethers.Contract(address, abi, provider);
+    return contract;
+  }
+
+  async createContract(payload) {
+    const { email, fromEmail, account, bytecode, abi } = payload;
+    const txCount = await web3.eth.getTransactionCount(account);
+    try {
+      // Build the transaction
+      tx = {
+        from: account,
+        nonce:    txCount,
+        gasLimit: 21000,
+        gasPrice: ethers.utils.bigNumberify("20000000000"),
+        data: bytecode, 
+        type: "contract", 
+        abi  
+      }
+      const params = {
+        email, 
+        fromEmail, 
+        txObject: tx
+      }
+      const approval = await this.generateApproval(params);
+      if(approval.success) {
+        return approval;
+      } else {
+        return {
+          success: false, 
+          body: approval.body
+        }
+      }
+    } catch (error) {
+      console.log("ERROR", error);
+      return {success: false, body: error};
+    }
+  }
+
+  async createContractTransaction(params) {
+    const { method, value, abi, address, account, email, fromEmail } = params;
+    const { network, devId, development } = this.config;
+    tx = params;
+    tx.to = address;
+    let estimate;
+    //const txCount = await web3.eth.getTransactionCount(account);
+    const provider = new ethers.providers.Web3Provider(this.provider);
+    let contract = new ethers.Contract(address, abi, provider);
+    if(value instanceof Array) {
+      estimate = await contract.estimate[method](...value);
     } else {
-      const appKeyParams = {
-        username: params.credObj.id,
-        appObj: params.appObj,
-        password: params.credObj.password
-      }
-      const profile = await this.updateProfile(params.credObj.id, params.appObj);
-      try {
-        const appKeys = await this.makeAppKeyPair(appKeyParams, profile);
-        if(appKeys.success) {
-          const appPrivateKey = JSON.parse(appKeys.body).blockstack ? JSON.parse(appKeys.body).blockstack.private : "";
-          const appUrl = JSON.parse(appKeys.body).blockstack.appUrl || "";
-          configObj = JSON.parse(appKeys.body).config;
-          apiKey = JSON.parse(appKeys.body).apiKey || "";
-          wallet = JSON.parse(appKeys.body).wallet;
-          textile = JSON.parse(appKeys.body).textile || "";
-          
-          profile.apps[params.appObj.appOrigin] = appUrl;
-          //Now, we login
-          try {
-            const userSessionParams = {
-              credObj: params.credObj,
-              appObj: params.appObj,
-              userPayload: {
-                privateKey: appPrivateKey,
-              }
-            }
-            const userPayload = userSessionParams.userPayload;
-            const sessionObj = {
-              scopes: params.appObj.scopes,
-              appOrigin: params.appObj.appOrigin,
-              appPrivKey: userPayload.privateKey,
-              hubUrl: params.credObj.hubUrl ? params.credObj.hubUrl : "https://hub.blockstack.org", //Still have to think through this one
-              username: params.credObj.id,
-              profile: newProfile
-            }
-            const userSession = await this.makeUserSession(sessionObj);
+      estimate = await contract.estimate[method](value);
+    }
 
-            if(userSession) {
-              return {
-                message: "user session created",
-                body: userSession.body
-              }
-            } else {
-              return {
-                message: "trouble creating user session",
-                body: null
-              }
-            }
-          } catch (loginErr) {
-            return {
-              message: "trouble logging in",
-              body: loginErr
-            }
-          }
-        } else {
-          return {
-            message: "error creating app keys",
-            body: appKeys.body
-          }
-        }
-      } catch(error) {
-        return {
-          message: "error creating app keys",
-          body: appKeys.body ? appKeys.body : error
-        }
-      }
-    }
-  },
-  makeUserSession: async function(sessionObj) {
-    if(!configObj) {
-      configObj = {};
-    } 
-    const appConfig = new AppConfig(
-      sessionObj.scopes,
-      sessionObj.appOrigin
-    )
-    const dataStore = new InstanceDataStore({
-      userData: {
-        appPrivateKey: sessionObj.appPrivKey,
-        identityAddress: idAddress,
-        hubUrl: sessionObj.hubUrl,
-        identityAddress: idAddress,
-        devConfig: configObj,
-        username: sessionObj.username,
-        gaiaHubConfig: await connectToGaiaHub('https://hub.blockstack.org', sessionObj.appPrivKey,""),
-        profile: sessionObj.profile,
-        wallet: wallet ? wallet : {},
-        textile
-      },
-    })
-    const userSession = new UserSession({
-      appConfig,
-      sessionStore: dataStore
-    })
-    try {
-  
-      return {
-          message: "user session created",
-          body: userSession
-      }
-    } catch(err) {
-      return {
-          message: "failed to create user session",
-          body: err
-      }
-    }
-  },
-  registerSubdomain: function(name, idAddress) {
-    const newId = idAddress.split('ID-')[1]
-    const zonefile = `$ORIGIN ${name}\n$TTL 3600\n_https._tcp URI 10 1 \"https://gaia.blockstack.org/hub/${newId}/profile.json\"\n`;
-    const dataString = JSON.stringify({zonefile, name, owner_address: newId})
-    const options = {
-      url: config.SUBDOMAIN_REGISTRATION,
-      method: 'POST',
-      headers: {
-        'cache-control': 'no-cache,no-cache',
-        'Content-Type': 'application/json',
-        'Authorization': 'bearer API-KEY-IF-USED'
-      },
-      body: dataString
-    };
-    return request(options)
-    .then(async (body) => {
-      // POST succeeded...
-      return {
-        message: "username registered",
-        body: body
-      }
-    })
-    .catch(error => {
-      // POST failed...
-      console.log('ERROR: ', error)
-      return {
-        message: "failed to register username",
-        body: error
-      }
+    const approvalObj = JSON.stringify({
+      email,
+      fromEmail,
+      gasEst: estimate.toNumber(), 
+      tx, 
+      network, 
+      devId, 
+      development
     });
-  },
-  updateProfile: async function(name, appObj) {
-   //First we look up the profile
-    let profile
+    var options = { url: config.SEND_TX_APPROVAL, method: 'POST', headers: headers, body: approvalObj };
     try {
-      profile = await lookupProfile(`${name}.id.blockstack`);
-      if (profile.apps) {
-        if(profile.apps[appObj.appOrigin]) {
-          //Don't need to do anything unless the gaia hub url is an empty string
-        } else {
-          if(appObj.scopes.indexOf("publish_data") > -1) {
-            profile.apps[appObj.appOrigin] = ""
-          }
-        }
-      }
-      return profile;
+      const postData = await postToApi(options);
+      return postData.body;
+    } catch(error) {
+      return { success: false, body: error }
     }
-    catch (error) {
-      console.log("ERROR:", error);
-      profile = {
-        '@type': 'Person',
-        '@context': 'http://schema.org',
-        'apps': {}
-      }
-      if(appObj.scopes.indexOf("publish_data") > -1) {
-        profile.apps[appObj.appOrigin] = ""
-      }
-      return profile;
-    }
-  },
-  makeProfile: function(appObj) {
-    let profile = {
-      '@type': 'Person',
-      '@context': 'http://schema.org',
-      'apps': {}
-    }
-    if(appObj.scopes.indexOf("publish_data") > -1) {
-      profile.apps[appObj.appOrigin] = ""
-    }
+  }
 
-    return profile;
-  },
-  getConfig: function(params) {
+  async deployContract(params) {
+    const { devId, development, network } = this.config;
+    const { email, code, constructor } = params;
+    const payload = JSON.stringify({
+      devId,
+      email, 
+      network,
+      // abi: tx.abi, //transaction stored in memory
+      // bytecode: tx.data, //transaction stored in memory
+      code,
+      constructor, //When deploying a contract it's possible that a constructor value may be passed
+      development: development ? true : false
+    });
+    headers['Authorization'] = this.apiKey;
+    var options = { url: config.CREATE_CONTRACT_URL, method: 'POST', headers: headers, body: payload };
+    try {
+      const postData = await postToApi(options);
+      return postData.body;
+    } catch(error) {
+      return { success: false, body: error }
+    }
+  }
+
+  async broadcastTransaction(params) {
+    const { devId, development, network } = this.config;
+    const { email, code, threeBox, contractTx, threeBoxTx } = params;
+    const provider = new ethers.providers.Web3Provider(this.provider);
     const payload = {
+      devId,
+      email, 
+      network,
+      contractTx,
+      code,
+      threeBox,
+      threeBoxTx, 
+      development: development ? true : false
+    }
+    headers['Authorization'] = this.apiKey;
+    var options = { url: config.BROADCAST_TX, method: 'POST', headers: headers, body: JSON.stringify(payload) };
+    try {
+      const postData = await postToApi(options);
+      return {
+        success: true, 
+        body: postData.body
+      }
+    } catch(error) {
+      return { success: false, body: error }
+    }
+  }
+
+  async signTransaction(params) {
+    //There are times when a message or piece of data needs to be signed but 
+    //The actual data doesn't need to be broadcast on chain.
+    //TODO: build this
+  }
+
+  async generateApproval(params) {
+    const { email, fromEmail, txObject } = params;
+    const { devId, development, network } = this.config;
+    const provider = new ethers.providers.Web3Provider(this.provider);
+    
+    //const estimate = await provider.estimateGas(txObject)//await web3.eth.estimateGas(txObject);
+    const approvalObj = JSON.stringify({
+      email,
+      fromEmail,
+      //gasEst: estimate.toNumber(), 
+      tx: txObject, 
+      network, 
+      devId, 
+      development
+    });
+    headers['Authorization'] = this.apiKey;
+    var options = { url: config.SEND_TX_APPROVAL, method: 'POST', headers: headers, body: approvalObj };
+    try {
+      const postData = await postToApi(options);
+      return postData.body;
+    } catch(error) {
+      return { success: false, body: error }
+    }
+  }
+
+  async pollForStatus(tx) {
+    //TODO: Need to convert this to the ethers.js equivalent
+    const status = await web3.eth.getTransaction(tx);
+    console.log(status);
+    if(status && status.blockNumber) {
+      return "Mined";
+    } else {
+      return "Not mined"
+    }
+  }
+
+  //TODO: Pinata support needs significant upgrades
+  async pinContent(params) {
+    const payload = JSON.stringify({
+      devId: this.devId,
+      email: params.email,
+      devSuppliedIdentifier: params.id,
+      contentToPin: params.content,
+      development: this.development ? true : false
+    })
+    headers['Authorization'] = this.apiKey;
+    var options = { url: config.PIN_CONTENT_URL, method: 'POST', headers: headers, body: payload };
+    try {
+      const postData = await postToApi(options);
+      return postData;
+    } catch(error) {
+      return { success: false, body: error }
+    }
+  }
+
+  async fetchPinnedContent(params) {
+    const payload = JSON.stringify({
+      devId: this.devId,
+      email: params.email,
+      devSuppliedIdentifier: params.id,
+      development: this.development ? true : false
+    })
+    headers['Authorization'] = this.apiKey;
+    var options = { url: config.FETCH_PINNED_CONTENT_URL, method: 'POST', headers: headers, body: payload };
+    try {
+      const postData = await postToApi(options);
+      return postData;
+    } catch(error) {
+      return { success: false, body: error }
+    }
+  }
+
+  //***Dev App Specific Functions***//
+  async getConfig(params) {
+    const payload = JSON.stringify({
       devId: params.devId,
       development: params.development ? true : false
-    };
-    headers['Authorization'] = params.apiKey;
-    console.log(payload);
-    console.log(headers);
-    var options = { url: config.GET_CONFIG_URL, method: 'POST', headers: headers, form: payload };
-    return request(options)
-    .then((body) => {
-      console.log(body);
-      return {
-        message: "get developer account config",
-        body: body
-      }
-    })
-    .catch(error => {
-      console.log('Error: ', error);
-      return {
-        message: "failed to get developer account",
-        body: error
-      }
     });
-  },
-  updateConfig: function(updates, verification) {
-    const payload = {
+    headers['Authorization'] = params.apiKey;
+    var options = { url: config.GET_CONFIG_URL, method: 'POST', headers: headers, body: payload };
+    try {
+      const postData = await postToApi(options);
+      return postData;
+    } catch(error) {
+      return { success: false, body: error }
+    }
+  }
+
+  async updateConfig(updates, verification) {
+    const payload = JSON.stringify({
       devId: updates.username,
-      config: JSON.stringify(updates.config),
+      config: updates.config,
       development: updates.development ? true : false
-    };
-    console.log(payload.config);
+    });
     if(verification) {
       headers['Authorization'] = updates.verificationID;
     } else {
       headers['Authorization'] = updates.apiKey;
     }
-    console.log(headers);
-    var options = { url: config.UPDATE_CONFIG_URL, method: 'POST', headers: headers, form: payload };
-    return request(options)
-    .then((body) => {
-      console.log(body);
+    var options = { url: config.UPDATE_CONFIG_URL, method: 'POST', headers: headers, body: payload };
+    try {
+      const postData = await postToApi(options);
+      return postData;
+    } catch(error) {
+      return { success: false, body: error }
+    }
+  }
+  //*******//
+    
+  async blockstackNameCheck(name) {
+    const nameAvailable = await nameLookUp(name);
+    return nameAvailable;
+  }
+
+  async registerBlockstackSubdomain(name, idAddress) {
+    try {
+      const registered = await registerSubdomain(name, idAddress);
+      return registered;
+    } catch(error) {
       return {
-        message: "updated developer account",
-        body: body
+        success: false, body: error
       }
-    })
-    .catch(error => {
-      console.log('Error: ', error);
-      return {
-        message: "failed to update developer account",
-        body: error
-      }
-    });
-  },
-  createContract: function(params) {
-    const payload = {
-      devId: params.devId,
-      password: params.password,
+    }
+  }
+
+  async createBlockstackSession(params) {
+    const appObj = {
+      scopes: this.scopes, 
+      appOrigin: this.appOrigin, 
+      apiKey: this.apiKey, 
+      devId: this.devId, 
+      development: params.development ? params.development : false
+    }
+    const profile = await updateProfile(params.name, appObj);
+
+    const sessionObj = {
+      scopes: this.scopes,
+      appOrigin: this.appOrigin,
+      appPrivKey: params.privateKey,
+      hubUrl: params.hubUrl ? params.hubUrl : "https://hub.blockstack.org",
       username: params.username,
-      abi: JSON.stringify(params.abi),
-      bytecode: params.bytecode,
-      development: params.development ? true : false
+      profile, 
+      apiKey: this.apiKey, 
+      configObj
     }
-    headers['Authorization'] = params.apiKey;
-    var options = { url: config.CREATE_CONTRACT_URL, method: 'POST', headers: headers, form: payload };
-    return request(options)
-    .then((body) => {
-      console.log(body);
-      return {
-        message: "contract created and deployed",
-        body: body
-      }
-    })
-    .catch(error => {
-      console.log('Error: ', error);
-      return {
-        message: "failed to create contract",
-        body: error
-      }
-    });
-  },
-  fetchContract: function(params) {
-    const payload = {
-      devId: params.devId,
-      contractAddress: params.contractAddress,
-      abi: JSON.stringify(params.abi),
-      development: params.development ? true : false
+
+    try {
+      const userSession = await makeUserSession(sessionObj, idAddress);
+      return userSession;
+    } catch(error) {
+      return {success: false, body: error}
     }
-    headers['Authorization'] = params.apiKey;
-    var options = { url: config.FETCH_CONTRACT_URL, method: 'POST', headers: headers, form: payload };
-    return request(options)
-    .then((body) => {
-      console.log(body);
-      return {
-        message: "retreived contract and executed",
-        body: body
+  }
+
+  threeBox() {
+    return {
+      send: async (data, callback) => {
+        const txObject = {
+          threeBox: true, 
+          threeBoxTx: data.params[0], 
+          email: this.getUserData().email
+        }
+        const signed = await this.broadcastTransaction(txObject);
+        if(signed.body.success) {
+          callback(null, { result: signed.body.body });
+        } else {
+          console.log("Error", signed)
+        }
       }
-    })
-    .catch(error => {
-      console.log('Error: ', error);
-      return {
-        message: "failed to retreive contract",
-        body: error
-      }
-    });
-  },
-  pinContent: function(params) {
-    const payload = {
-      devId: params.devId,
-      username: params.username,
-      devSuppliedIdentifier: params.id,
-      contentToPin: JSON.stringify(params.content),
-      development: params.development ? true : false
     }
-    headers['Authorization'] = params.apiKey;
-    var options = { url: config.PIN_CONTENT_URL, method: 'POST', headers: headers, form: payload };
-    return request(options)
-    .then((body) => {
-      return {
-        message: "content successfully pinned",
-        body: body
-      }
-    })
-    .catch(error => {
-      console.log('Error: ', error);
-      return {
-        message: "failed to pin content",
-        body: error
-      }
-    });
-  },
-  fetchPinnedContent: function(params) {
-    const payload = {
-      devId: params.devId,
-      username: params.username,
-      devSuppliedIdentifier: params.id,
-      development: params.development ? true : false
-    }
-    headers['Authorization'] = params.apiKey;
-    var options = { url: config.FETCH_PINNED_CONTENT_URL, method: 'POST', headers: headers, form: payload };
-    return request(options)
-    .then((body) => {
-      return {
-        message: "Found pinned content",
-        body: body
-      }
-    })
-    .catch(error => {
-      console.log('Error: ', error);
-      return {
-        message: "failed to find pinned content",
-        body: error
-      }
-    });
   }
 }
